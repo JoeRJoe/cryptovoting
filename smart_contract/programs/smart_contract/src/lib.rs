@@ -1,15 +1,13 @@
 use std::time::SystemTime;
-
 use anchor_lang::prelude::*;
 
 declare_id!("EsQM7kVd85DLBrsZSVfgjdbFM6w5VUkqbu2w5Kt2ezto");
 
 #[program]
 pub mod smart_contract {
+
     use std::time::UNIX_EPOCH;
-
     use anchor_lang::solana_program::entrypoint::ProgramResult;
-
     use super::*;
 
     pub fn create_votazione(
@@ -27,6 +25,7 @@ pub mod smart_contract {
             .as_secs() as u64;
         votazione.data_scadenza = data_scadenza;
         votazione.owner = *context.accounts.user.key;
+        votazione.is_attiva = true;
         Ok(())
     }
 
@@ -44,11 +43,15 @@ pub mod smart_contract {
         crowdfunding.data_scadenza = data_scadenza;
         crowdfunding.owner = *context.accounts.user.key;
         crowdfunding.totale_donato = 0;
+        crowdfunding.is_attivo = true;
         Ok(())
     }
 
     pub fn vota(context: Context<Vota>, votazione: Votazione) -> ProgramResult {
         let voto = &mut context.accounts.voto;
+        if !votazione.is_attiva {
+            return Err(ProgramError::InvalidArgument);
+        }
         voto.votazione = votazione;
         voto.votante = *context.accounts.user.key;
         voto.data = SystemTime::now()
@@ -63,7 +66,8 @@ pub mod smart_contract {
             .duration_since(UNIX_EPOCH)
             .expect("Errore nel calcolo della data")
             .as_secs() as u64;
-        if (&context.accounts.crowdfunding).data_scadenza < now {
+        let crowdfunding = &mut context.accounts.crowdfunding;
+        if crowdfunding.data_scadenza < now || !crowdfunding.is_attivo{
             return Err(ProgramError::InvalidArgument);
         }
         let instruction = anchor_lang::solana_program::system_instruction::transfer(
@@ -81,15 +85,62 @@ pub mod smart_contract {
         (&mut context.accounts.crowdfunding).totale_donato += somma;
         Ok(())
     }
+
+    pub fn preleva(context: Context<Preleva>) -> ProgramResult {
+        let crowdfunding = &mut context.accounts.crowdfunding;
+        let user = &mut context.accounts.user;
+        if crowdfunding.owner != *user.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        if !crowdfunding.is_attivo {
+            return Err(ProgramError::InvalidArgument);
+        }
+        let amount = **crowdfunding.to_account_info().lamports.borrow() - Rent::get()?.minimum_balance(crowdfunding.to_account_info().data_len());
+        **crowdfunding.to_account_info().try_borrow_mut_lamports()? -= amount;
+        **user.to_account_info().try_borrow_mut_lamports()? += amount;
+        Ok(())
+    }
+
+    pub fn disattiva_votazione(context: Context<DisattivaVotazione>) -> ProgramResult {
+        let user = &mut context.accounts.user;
+        let votazione = &mut context.accounts.votazione;
+        let crowdfunding = &mut context.accounts.crowdfunding;
+        if votazione.owner != *user.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        votazione.is_attiva = false;
+        match crowdfunding {
+            Some(crowdfunding) => {
+                if crowdfunding.votazione != **votazione {
+                    return Err(ProgramError::InvalidArgument);
+                }
+                crowdfunding.is_attivo = false;
+            },
+            None => {}
+        }
+        Ok(())
+    }
+
+    pub fn disattiva_crowdfunding(context: Context<DisattivaCrowdfunding>) -> ProgramResult {
+        let crowdfunding = &mut context.accounts.crowdfunding;
+        let user = &mut context.accounts.user;
+        if crowdfunding.owner!= *user.key {
+            return Err(ProgramError::IncorrectProgramId);
+        }
+        crowdfunding.is_attivo = false;
+        Ok(())
+    }
 }
 
 #[account]
+#[derive(PartialEq)]
 pub struct Votazione {
     pub nome: String,
     pub descrizione: String,
     pub owner: Pubkey,
     pub data_inizio: u64,
     pub data_scadenza: u64,
+    pub is_attiva: bool,
 }
 
 #[account]
@@ -99,6 +150,7 @@ pub struct Crowdfunding {
     pub votazione: Votazione,
     pub data_inizio: u64,
     pub data_scadenza: u64,
+    pub is_attivo: bool,
 }
 
 #[account]
@@ -109,8 +161,9 @@ pub struct Voto {
 }
 
 #[derive(Accounts)]
+#[instruction(nome: String)]
 pub struct CreateVotazione<'info> {
-    #[account(init, payer = user, space = 250)]
+    #[account(init, payer = user, space = 250, seeds = [nome.as_ref(), user.key.as_ref()], bump)]
     pub votazione: Account<'info, Votazione>,
     #[account(mut)]
     pub user: Signer<'info>,
@@ -158,4 +211,24 @@ pub struct Preleva<'info> {
     pub crowdfunding: Account<'info, Crowdfunding>,
     #[account(mut)]
     pub user: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct DisattivaVotazione<'info>{
+    #[account(mut)]
+    pub votazione: Account<'info, Votazione>,
+    #[account(mut)]
+    pub crowdfunding: Option<Account<'info, Crowdfunding>>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct DisattivaCrowdfunding<'info> {
+    #[account(mut)]
+    pub crowdfunding: Account<'info, Crowdfunding>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
