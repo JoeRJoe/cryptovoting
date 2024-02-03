@@ -28,10 +28,11 @@ pub mod smart_contract {
         crowdfunding.data_inizio = SystemTime::now().duration_since(UNIX_EPOCH).expect("Errore nel calcolo della data").as_secs() as u64;
         crowdfunding.data_scadenza = data_scadenza;
         crowdfunding.owner = *context.accounts.user.key;
+        crowdfunding.totale_donato = 0;
         Ok(())
     }
 
-    pub fn vota(context: Context<CreateVoto>, votazione: Votazione) -> ProgramResult {
+    pub fn vota(context: Context<Vota>, votazione: Votazione) -> ProgramResult {
         let voto = &mut context.accounts.voto;
         voto.votazione = votazione;
         voto.votante = *context.accounts.user.key;
@@ -86,7 +87,7 @@ pub struct CreateCrowdfunding<'info> {
 }
 
 #[derive(Accounts)]
-pub struct CreateVoto<'info> {
+pub struct Vota<'info> {
     #[account(init, payer = user, space = 150, seeds = [votazione.key().as_ref(), user.key.as_ref()], bump)]
     pub voto: Account<'info, Voto>,
     pub votazione: Account<'info, Votazione>,
