@@ -12,20 +12,35 @@ pub mod smart_contract {
 
     use super::*;
 
-    pub fn create_votazione(context: Context<CreateVotazione>, nome: String, descrizione: String, data_scadenza: u64) -> ProgramResult {
+    pub fn create_votazione(
+        context: Context<CreateVotazione>,
+        nome: String,
+        descrizione: String,
+        data_scadenza: u64
+    ) -> ProgramResult {
         let votazione = &mut context.accounts.votazione;
         votazione.nome = nome;
         votazione.descrizione = descrizione;
-        votazione.data_inizio = SystemTime::now().duration_since(UNIX_EPOCH).expect("Errore nel calcolo della data").as_secs() as u64;
+        votazione.data_inizio = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Errore nel calcolo della data")
+            .as_secs() as u64;
         votazione.data_scadenza = data_scadenza;
         votazione.owner = *context.accounts.user.key;
         Ok(())
     }
 
-    pub fn create_crowdfunding(context: Context<CreateCrowdfunding>, votazione: Votazione, data_scadenza: u64) -> ProgramResult {
+    pub fn create_crowdfunding(
+        context: Context<CreateCrowdfunding>,
+        votazione: Votazione,
+        data_scadenza: u64
+    ) -> ProgramResult {
         let crowdfunding = &mut context.accounts.crowdfunding;
         crowdfunding.votazione = votazione;
-        crowdfunding.data_inizio = SystemTime::now().duration_since(UNIX_EPOCH).expect("Errore nel calcolo della data").as_secs() as u64;
+        crowdfunding.data_inizio = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Errore nel calcolo della data")
+            .as_secs() as u64;
         crowdfunding.data_scadenza = data_scadenza;
         crowdfunding.owner = *context.accounts.user.key;
         crowdfunding.totale_donato = 0;
@@ -36,10 +51,36 @@ pub mod smart_contract {
         let voto = &mut context.accounts.voto;
         voto.votazione = votazione;
         voto.votante = *context.accounts.user.key;
-        voto.data = SystemTime::now().duration_since(UNIX_EPOCH).expect("Errore nel calcolo della data").as_secs() as u64;
+        voto.data = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Errore nel calcolo della data")
+            .as_secs() as u64;
         Ok(())
     }
 
+    pub fn dona(context: Context<Dona>, somma: u64) -> ProgramResult {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("Errore nel calcolo della data")
+            .as_secs() as u64;
+        if (&context.accounts.crowdfunding).data_scadenza < now {
+            return Err(ProgramError::InvalidArgument);
+        }
+        let instruction = anchor_lang::solana_program::system_instruction::transfer(
+            &context.accounts.user.key(),
+            &context.accounts.crowdfunding.key(),
+            somma
+        );
+        let _ = anchor_lang::solana_program::program::invoke(
+            &instruction,
+            &[
+                context.accounts.user.to_account_info(),
+                context.accounts.crowdfunding.to_account_info(),
+            ]
+        );
+        (&mut context.accounts.crowdfunding).totale_donato += somma;
+        Ok(())
+    }
 }
 
 #[account]
@@ -88,10 +129,33 @@ pub struct CreateCrowdfunding<'info> {
 
 #[derive(Accounts)]
 pub struct Vota<'info> {
-    #[account(init, payer = user, space = 150, seeds = [votazione.key().as_ref(), user.key.as_ref()], bump)]
+    #[account(
+        init,
+        payer = user,
+        space = 150,
+        seeds = [votazione.key().as_ref(), user.key.as_ref()],
+        bump
+    )]
     pub voto: Account<'info, Voto>,
     pub votazione: Account<'info, Votazione>,
     #[account(mut)]
     pub user: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Dona<'info> {
+    #[account(mut)]
+    pub crowdfunding: Account<'info, Crowdfunding>,
+    #[account(mut)]
+    pub user: Signer<'info>,
+    pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct Preleva<'info> {
+    #[account(mut)]
+    pub crowdfunding: Account<'info, Crowdfunding>,
+    #[account(mut)]
+    pub user: Signer<'info>,
 }
